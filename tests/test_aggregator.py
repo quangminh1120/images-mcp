@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import respx
 
 from stock_image_mcp.aggregator import search_all
 from stock_image_mcp.models import ImageResult, ProviderName, SearchParams
@@ -69,3 +70,17 @@ async def test_search_all_reports_rate_limit_exceeded() -> None:
 
     assert outcomes[ProviderName.PEXELS].results == []
     assert "rate limit" in (outcomes[ProviderName.PEXELS].skipped_reason or "").lower()
+
+
+@respx.mock
+async def test_search_all_error_reason_has_no_api_key() -> None:
+    from stock_image_mcp.models import ProviderName as PN
+    from stock_image_mcp.providers.pixabay import PixabayProvider
+
+    respx.get("https://pixabay.com/api/").mock(return_value=httpx.Response(429))
+    async with httpx.AsyncClient() as client:
+        providers = {PN.PIXABAY: PixabayProvider("super-secret-key", client)}
+        outcomes = await search_all(providers, SearchParams(query="x"), RateLimiter())
+    reason = outcomes[PN.PIXABAY].skipped_reason or ""
+    assert "429" in reason
+    assert "super-secret-key" not in reason

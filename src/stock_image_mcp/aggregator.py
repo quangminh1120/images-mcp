@@ -34,9 +34,11 @@ async def search_provider(
         return ProviderSearchOutcome(provider.name, [], skipped_reason=str(exc))
 
     try:
-        results = await provider.search(params)
+        results = await provider.safe_search(params)
     except Exception as exc:  # noqa: BLE001 - one provider's failure must not sink the rest
-        logger.warning("Provider %s search failed: %s", provider.name, exc, exc_info=True)
+        # safe_search messages never contain API keys; no traceback, since the
+        # chained httpx exception would carry the request URL (and key).
+        logger.warning("Provider %s search failed: %s", provider.name, exc)
         return ProviderSearchOutcome(provider.name, [], skipped_reason=f"error: {exc}")
 
     return ProviderSearchOutcome(provider.name, results)

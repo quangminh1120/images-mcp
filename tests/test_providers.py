@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from stock_image_mcp.models import Orientation, SearchParams
+from stock_image_mcp.providers.base import ProviderError
 from stock_image_mcp.providers.burst import BurstProvider
 from stock_image_mcp.providers.freepik import FreepikProvider
 from stock_image_mcp.providers.google import GoogleProvider, GoogleProviderError
@@ -313,3 +314,45 @@ class TestGoogle:
             await GoogleProvider("secret-key", client).search(SearchParams(query="x"))
         assert "secret-key" not in str(info.value)
         assert "serpapi.com" not in str(info.value)
+
+
+class TestErrorsNeverLeakKeys:
+    @respx.mock
+    @pytest.mark.parametrize("status", [401, 429, 500])
+    async def test_query_param_key_not_in_error(
+        self, client: httpx.AsyncClient, status: int
+    ) -> None:
+        respx.get("https://pixabay.com/api/").mock(return_value=httpx.Response(status))
+        provider = PixabayProvider("super-secret-key", client)
+        with pytest.raises(ProviderError) as info:
+            await provider.safe_search(SearchParams(query="x"))
+        assert "super-secret-key" not in str(info.value)
+        assert "pixabay.com/api" not in str(info.value)
+        assert str(status) in str(info.value)
+        assert info.value.__suppress_context__
+
+    @respx.mock
+    async def test_network_error_not_leaked(self, client: httpx.AsyncClient) -> None:
+        respx.get("https://www.stockvault.net/api/search").mock(
+            side_effect=httpx.ConnectError("cannot reach")
+        )
+        provider = StockVaultProvider("super-secret-key", client)
+        with pytest.raises(ProviderError) as info:
+            await provider.safe_search(SearchParams(query="x"))
+        assert "super-secret-key" not in str(info.value)
+
+    @respx.mock
+    async def test_pixabay_trims_to_requested_count(self, client: httpx.AsyncClient) -> None:
+        hit = {
+            "id": 1,
+            "largeImageURL": "https://pixabay.com/get/1.jpg",
+            "previewURL": "https://cdn.pixabay.com/1.jpg",
+            "pageURL": "https://pixabay.com/photos/1",
+        }
+        respx.get("https://pixabay.com/api/").mock(
+            return_value=httpx.Response(
+                200, json={"hits": [hit, {**hit, "id": 2}, {**hit, "id": 3}]}
+            )
+        )
+        results = await PixabayProvider("k", client).search(SearchParams(query="x", per_page=1))
+        assert len(results) == 1

@@ -89,7 +89,7 @@ async def search_stock_images(
         page=page,
     )
     await _rate_limiter.acquire(provider_name)
-    results = await image_provider.search(params)
+    results = await image_provider.safe_search(params)
     _cache_results(results)
     return results
 

@@ -51,7 +51,7 @@ class PixabayProvider(ImageProvider):
                     source_page_url=item["pageURL"],
                 )
             )
-        return results
+        return results[: params.per_page]  # we may have asked for 3 to satisfy the API
 
     def build_attribution(self, image: ImageResult) -> str:
         name = image.photographer_name or "Unknown"

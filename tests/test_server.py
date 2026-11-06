@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import httpx
+import pytest
 import respx
 
 os.environ.setdefault("PEXELS_API_KEY", "test-pexels-key")
@@ -72,7 +74,15 @@ async def test_search_then_get_attribution_round_trip() -> None:
 def test_get_rate_limit_status_reports_all_providers() -> None:
     statuses = server.get_rate_limit_status()
     provider_names = {s.provider.value for s in statuses}
-    assert provider_names == {"unsplash", "pexels", "pixabay", "freepik", "stockvault", "burst"}
+    assert provider_names == {
+        "unsplash",
+        "pexels",
+        "pixabay",
+        "freepik",
+        "stockvault",
+        "burst",
+        "google",
+    }
 
 
 async def test_download_image_tool_refuses_paths_outside_download_dir() -> None:
@@ -99,3 +109,65 @@ async def test_search_all_images_skips_unconfigured_and_reports_string_reason() 
 
     assert isinstance(output["stockvault"], str)
     assert "not configured" in output["stockvault"]
+
+
+async def test_search_all_images_skips_google_by_default() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        google = router.get("https://serpapi.com/search.json").mock(
+            return_value=httpx.Response(200, json={"images_results": []})
+        )
+        router.get(url__regex=r".*").mock(return_value=httpx.Response(500))
+        output = await server.search_all_images("test query")
+
+    assert not google.called
+    assert isinstance(output["google"], str)
+    assert "include_google" in output["google"]
+
+
+async def test_search_all_images_includes_google_when_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stock_image_mcp.models import ProviderName
+    from stock_image_mcp.providers.google import GoogleProvider
+
+    monkeypatch.setitem(server._providers, ProviderName.GOOGLE, GoogleProvider("k", server._client))
+    with respx.mock(assert_all_called=False) as router:
+        google = router.get("https://serpapi.com/search.json").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "images_results": [
+                        {"original": "https://a.example.com/x.jpg", "link": "https://a.example.com"}
+                    ]
+                },
+            )
+        )
+        router.get(url__regex=r".*").mock(return_value=httpx.Response(500))
+        output = await server.search_all_images("test query", include_google=True)
+
+    assert google.called
+    results = output["google"]
+    assert isinstance(results, list) and results[0].copyright_unverified is True
+
+
+def test_blank_keys_in_env_file_mean_not_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from stock_image_mcp.config import Settings
+    from stock_image_mcp.models import ProviderName
+    from stock_image_mcp.providers import build_providers
+
+    example = Path(__file__).parent.parent / ".env.example"
+    (tmp_path / ".env").write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    for var in ("PEXELS_API_KEY", "UNSPLASH_ACCESS_KEY", "SERPAPI_KEY", "GOOGLE_LICENSE_FILTER"):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = Settings()
+    assert settings.pexels_api_key is None
+    assert settings.serpapi_key is None
+    assert settings.google_license_filter is None
+    providers = build_providers(settings, httpx.AsyncClient())
+    assert not providers[ProviderName.PEXELS].configured
+    assert not providers[ProviderName.GOOGLE].configured
+    assert providers[ProviderName.BURST].configured

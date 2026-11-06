@@ -16,10 +16,35 @@ SEO blog posts or other content.
 | Freepik         | Official              | Yes          | configurable (plan-dependent)                     |
 | StockVault      | Official              | Yes          | configurable (undocumented, conservative default) |
 | Burst (Shopify) | **Unofficial scrape** | No           | self-imposed, polite default                      |
+| Google Images   | SerpAPI (**paid**)    | Yes          | 20/hr (configurable)                              |
 
 Burst has no public API. It's included as a best-effort HTML scraper, clearly
 marked unsupported in code — any failure there is caught and reported as an
 empty result rather than breaking `search_all_images`.
+
+### Google Images (opt-in)
+
+Google searches the whole web through [SerpAPI](https://serpapi.com/manage-api-key)'s
+`google_images` engine — useful for real products, brands, people or news that
+stock sites don't have. Two things make it different from the stock providers:
+
+- **It costs money.** SerpAPI gives 100 free searches a month, then roughly
+  $0.01 each. So `search_all_images` leaves Google out unless the call passes
+  `include_google=true` (or you set `GOOGLE_IN_SEARCH_ALL=true`). Query it
+  directly with `search_stock_images(query, provider="google")`.
+- **Results may be copyrighted.** Every Google result has
+  `copyright_unverified: true` and a licence of "Unknown"; check the source
+  page before publishing. Set `GOOGLE_LICENSE_FILTER=cl` to ask Google for
+  Creative Commons images only (`f`, `fc`, `fm`, `fmc`, `ol` are the other
+  SerpAPI licence filters).
+
+## Downloads are sandboxed
+
+`download_image` only writes inside `DOWNLOAD_DIR`: `dest_path` must be a
+relative path ending in `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp` or `.avif`;
+absolute paths and `..` are refused. It fetches only public http(s) URLs
+(every redirect is re-checked), requires a real raster image by both
+Content-Type and file signature, and stops at 20 MB.
 
 ## Install
 
@@ -109,7 +134,7 @@ first run):
 ```
 
 Only `UNSPLASH_ACCESS_KEY`, `PEXELS_API_KEY`, `PIXABAY_API_KEY`,
-`FREEPIK_API_KEY`, and `STOCKVAULT_API_KEY` are actual secrets — set only the
+`FREEPIK_API_KEY`, `STOCKVAULT_API_KEY` and `SERPAPI_KEY` (Google, see above) are actual secrets — set only the
 ones for providers you want enabled and drop the rest; any provider key you
 omit is simply skipped by `search_all_images` and rejected if queried
 directly via `search_stock_images`. The remaining variables are optional
@@ -119,9 +144,9 @@ full list.
 ## Tools
 
 - `search_stock_images(query, provider="default", orientation=None, per_page=10, page=1)`
-- `search_all_images(query, orientation=None, per_page=5)` — fans out to every configured provider concurrently
+- `search_all_images(query, orientation=None, per_page=5, include_google=None)` — fans out to every configured provider concurrently (Google only when `include_google=true`)
 - `get_best_image(query, provider="default")`
-- `download_image(url, dest_path, provider=None)` — saves locally, returns attribution text if the image came from a prior search
+- `download_image(url, dest_path, provider=None)` — saves inside `DOWNLOAD_DIR` (relative image path only), returns attribution text if the image came from a prior search
 - `get_attribution(provider, image_id)`
 - `get_rate_limit_status(provider=None)`
 

@@ -14,6 +14,7 @@ class ProviderName(StrEnum):
     FREEPIK = "freepik"
     STOCKVAULT = "stockvault"
     BURST = "burst"
+    GOOGLE = "google"
 
 
 class Orientation(StrEnum):
@@ -48,6 +49,9 @@ class ImageResult(BaseModel):
     license: str
     attribution_required: bool
     source_page_url: str
+    # True when the provider gives no licence guarantee (Google Images): the
+    # image may be copyrighted and must be checked before it is published.
+    copyright_unverified: bool = False
 
 
 class RateLimitStatus(BaseModel):

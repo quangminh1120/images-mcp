@@ -33,7 +33,13 @@ _RATE_LIMIT_CONFIG: dict[ProviderName, tuple[int, int]] = {
     ProviderName.FREEPIK: (_settings.freepik_requests_per_minute, 60),
     ProviderName.STOCKVAULT: (_settings.stockvault_requests_per_hour, 3600),
     ProviderName.BURST: (_settings.burst_requests_per_minute, 60),
+    ProviderName.GOOGLE: (_settings.serpapi_requests_per_hour, 3600),
 }
+
+_GOOGLE_SKIPPED = (
+    "skipped: Google is paid (SerpAPI) and off by default; "
+    "pass include_google=true if the user asks for Google results"
+)
 
 _rate_limiter = RateLimiter()
 for _name, (_limit, _window) in _RATE_LIMIT_CONFIG.items():
@@ -63,7 +69,14 @@ async def search_stock_images(
     per_page: int = 10,
     page: int = 1,
 ) -> list[ImageResult]:
-    """Search a single stock image provider (or the configured default) for a query."""
+    """Search a single image provider (or the configured default) for a query.
+
+    provider: "default", "unsplash", "pexels", "pixabay", "freepik", "stockvault",
+    "burst" or "google". The stock providers return free-to-use images. "google"
+    searches the whole web via SerpAPI (paid, ~$0.01 per call) — use it only when
+    the user asks for Google or needs real-world specifics (products, brands,
+    people, news). Google results carry copyright_unverified=true: tell the user
+    the image may be copyrighted and must be checked before publishing."""
     provider_name = _resolve_provider(provider)
     image_provider = _providers[provider_name]
     if not image_provider.configured:
@@ -83,17 +96,29 @@ async def search_stock_images(
 
 @mcp.tool()
 async def search_all_images(
-    query: str, orientation: str | None = None, per_page: int = 5
+    query: str,
+    orientation: str | None = None,
+    per_page: int = 5,
+    include_google: bool | None = None,
 ) -> dict[str, list[ImageResult] | str]:
     """Search every configured provider concurrently; unconfigured or rate-limited
-    providers are skipped with a note rather than failing the whole call."""
+    providers are skipped with a note rather than failing the whole call.
+
+    Google (paid, possibly copyrighted results) is left out unless
+    include_google=true, or the server sets GOOGLE_IN_SEARCH_ALL=true."""
     params = SearchParams(
         query=query,
         orientation=Orientation(orientation) if orientation else None,
         per_page=per_page,
     )
-    outcomes = await search_all(_providers, params, _rate_limiter)
+    use_google = _settings.google_in_search_all if include_google is None else include_google
+    providers = {
+        name: p for name, p in _providers.items() if use_google or name != ProviderName.GOOGLE
+    }
+    outcomes = await search_all(providers, params, _rate_limiter)
     output: dict[str, list[ImageResult] | str] = {}
+    if not use_google:
+        output[ProviderName.GOOGLE.value] = _GOOGLE_SKIPPED
     for provider_name, outcome in outcomes.items():
         _cache_results(outcome.results)
         output[provider_name.value] = outcome.skipped_reason or outcome.results

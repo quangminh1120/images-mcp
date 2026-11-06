@@ -7,6 +7,7 @@ import respx
 from stock_image_mcp.models import Orientation, SearchParams
 from stock_image_mcp.providers.burst import BurstProvider
 from stock_image_mcp.providers.freepik import FreepikProvider
+from stock_image_mcp.providers.google import GoogleProvider, GoogleProviderError
 from stock_image_mcp.providers.pexels import PexelsProvider
 from stock_image_mcp.providers.pixabay import PixabayProvider
 from stock_image_mcp.providers.stockvault import StockVaultProvider
@@ -217,3 +218,98 @@ class TestBurst:
         provider = BurstProvider(None, client)
         results = await provider.search(SearchParams(query="cool"))
         assert results == []
+
+
+_SERPAPI = "https://serpapi.com/search.json"
+_GOOGLE_RESPONSE = {
+    "images_results": [
+        {
+            "position": 1,
+            "title": "Red sneaker product shot",
+            "original": "https://shop.example.com/img/red-sneaker.jpg",
+            "original_width": 1200,
+            "original_height": 800,
+            "thumbnail": "https://encrypted-tbn0.gstatic.com/images?q=1",
+            "link": "https://shop.example.com/red-sneaker",
+            "source": "Example Shop",
+        },
+        {"position": 2, "title": "no original url"},
+        {
+            "position": 3,
+            "title": "Second",
+            "original": "https://news.example.org/b.png",
+            "link": "https://news.example.org/story",
+            "source": "Example News",
+        },
+    ]
+}
+
+
+class TestGoogle:
+    def test_requires_serpapi_key(self) -> None:
+        assert GoogleProvider(None, httpx.AsyncClient()).configured is False
+        assert GoogleProvider("key", httpx.AsyncClient()).configured is True
+
+    def test_rejects_unknown_license_filter(self) -> None:
+        with pytest.raises(ValueError, match="GOOGLE_LICENSE_FILTER"):
+            GoogleProvider("key", httpx.AsyncClient(), license_filter="anything")
+
+    @respx.mock
+    async def test_search_parses_and_flags_copyright(self, client: httpx.AsyncClient) -> None:
+        route = respx.get(_SERPAPI).mock(return_value=httpx.Response(200, json=_GOOGLE_RESPONSE))
+        provider = GoogleProvider("secret-key", client, license_filter="cl")
+        results = await provider.search(
+            SearchParams(query="red sneaker", orientation=Orientation.LANDSCAPE, page=2)
+        )
+
+        sent = route.calls.last.request.url.params
+        assert sent["engine"] == "google_images"
+        assert sent["q"] == "red sneaker"
+        assert sent["imgar"] == "w"
+        assert sent["ijn"] == "1"
+        assert sent["licenses"] == "cl"
+
+        assert len(results) == 2  # item without "original" is dropped
+        first = results[0]
+        assert first.provider.value == "google"
+        assert first.url == "https://shop.example.com/img/red-sneaker.jpg"
+        assert first.source_page_url == "https://shop.example.com/red-sneaker"
+        assert first.width == 1200
+        assert first.copyright_unverified is True
+        assert first.attribution_required is True
+        assert "may be copyrighted" in first.license
+        assert "NOT verified" in provider.build_attribution(first)
+        assert "Example Shop" in provider.build_attribution(first)
+
+    @respx.mock
+    async def test_search_respects_per_page(self, client: httpx.AsyncClient) -> None:
+        respx.get(_SERPAPI).mock(return_value=httpx.Response(200, json=_GOOGLE_RESPONSE))
+        results = await GoogleProvider("k", client).search(SearchParams(query="x", per_page=1))
+        assert len(results) == 1
+
+    @respx.mock
+    async def test_no_results_is_empty_not_error(self, client: httpx.AsyncClient) -> None:
+        respx.get(_SERPAPI).mock(
+            return_value=httpx.Response(
+                200, json={"error": "Google hasn't returned any results for this query."}
+            )
+        )
+        assert await GoogleProvider("k", client).search(SearchParams(query="zzzz")) == []
+
+    @respx.mock
+    async def test_errors_never_leak_api_key(self, client: httpx.AsyncClient) -> None:
+        respx.get(_SERPAPI).mock(
+            return_value=httpx.Response(401, json={"error": "Invalid API key: secret-key"})
+        )
+        with pytest.raises(GoogleProviderError) as info:
+            await GoogleProvider("secret-key", client).search(SearchParams(query="x"))
+        assert "secret-key" not in str(info.value)
+        assert info.value.__cause__ is None
+
+    @respx.mock
+    async def test_network_errors_never_leak_api_key(self, client: httpx.AsyncClient) -> None:
+        respx.get(_SERPAPI).mock(side_effect=httpx.ConnectError("boom"))
+        with pytest.raises(GoogleProviderError) as info:
+            await GoogleProvider("secret-key", client).search(SearchParams(query="x"))
+        assert "secret-key" not in str(info.value)
+        assert "serpapi.com" not in str(info.value)

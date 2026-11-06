@@ -75,6 +75,19 @@ def test_get_rate_limit_status_reports_all_providers() -> None:
     assert provider_names == {"unsplash", "pexels", "pixabay", "freepik", "stockvault", "burst"}
 
 
+async def test_download_image_tool_refuses_paths_outside_download_dir() -> None:
+    from stock_image_mcp.downloader import DownloadError
+
+    startup = "C:/Users/x/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/u.bat"
+    for dest in (startup, "../../evil.jpg", "/etc/evil.jpg", "notes.txt"):
+        try:
+            await server.download_image("https://example.com/x.jpg", dest)
+        except DownloadError:
+            pass
+        else:
+            raise AssertionError(f"expected DownloadError for {dest!r}")
+
+
 async def test_search_all_images_skips_unconfigured_and_reports_string_reason() -> None:
     respx_router = respx.mock(assert_all_called=False)
     respx_router.get("https://api.pexels.com/v1/search").mock(

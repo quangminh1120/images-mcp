@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 from mcp.server.mcpserver import MCPServer
 
@@ -11,6 +9,7 @@ from stock_image_mcp.aggregator import search_all
 from stock_image_mcp.attribution import format_attribution
 from stock_image_mcp.config import Settings, get_settings
 from stock_image_mcp.downloader import download_image as _download_image
+from stock_image_mcp.downloader import resolve_dest
 from stock_image_mcp.models import (
     ImageResult,
     Orientation,
@@ -110,12 +109,15 @@ async def get_best_image(query: str, provider: str = "default") -> ImageResult |
 
 @mcp.tool()
 async def download_image(url: str, dest_path: str, provider: str | None = None) -> dict[str, str]:
-    """Download an image URL to a local path so it can be embedded directly
-    in a blog post's asset folder. Returns the saved path and, if the image
-    was previously returned by a search call, its attribution text."""
-    path = Path(dest_path)
-    if not path.is_absolute():
-        path = _settings.download_dir / path
+    """Download an image URL into the configured download directory so it can
+    be embedded in a blog post's asset folder.
+
+    `dest_path` must be RELATIVE to the download directory and end in an image
+    extension (.jpg .jpeg .png .gif .webp .avif), e.g. "blog/hero.jpg".
+    Absolute paths and ".." are refused. The URL must be public http(s) and
+    return a real image of at most 20 MB. Returns the saved path and, if the
+    image was previously returned by a search call, its attribution text."""
+    path = resolve_dest(_settings.download_dir, dest_path)
     saved_path = await _download_image(_client, url, path)
 
     attribution_text = None
